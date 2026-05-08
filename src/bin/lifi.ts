@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { registerAuthCommand } from "../commands/auth.js";
 import { registerChainsCommand } from "../commands/chains.js";
+import { registerComposerCommand } from "../commands/composer.js";
 import { registerConnectionsCommand } from "../commands/connections.js";
 import { registerEarnCommand } from "../commands/earn.js";
 import { registerGasCommand } from "../commands/gas.js";
@@ -48,6 +49,7 @@ export function createProgram(): Command {
   registerRoutesCommand(program);
   registerStatusCommand(program);
   registerConnectionsCommand(program);
+  registerComposerCommand(program);
   registerEarnCommand(program);
   registerToolsCommand(program);
   registerGasCommand(program);

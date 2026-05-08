@@ -11,7 +11,6 @@ import type {
   EarnVault,
   EarnVaultsResponse,
 } from "../types/index.js";
-import axios from "axios";
 
 function protocolName(protocol: EarnProtocol | string | undefined): string {
   if (!protocol) return "N/A";
@@ -201,11 +200,7 @@ Examples:
         if (isJsonMode(opts)) {
           console.log(jsonOutput(data));
         } else {
-          const rows = data.map((protocol) => [
-            protocol.name,
-            protocol.url ?? "N/A",
-            protocol.logoUri?? "N/A"
-          ]);
+          const rows = data.map((protocol) => [protocol.name, protocol.url ?? "N/A", protocol.logoUri ?? "N/A"]);
           console.log(formatTable(["Name", "URL", "Logo URI"], rows));
         }
       } catch (error) {
@@ -234,7 +229,10 @@ Examples:
           console.log(jsonOutput(data));
         } else {
           console.log(
-            formatTable(["Chain ID", "Protocol", "Protocol Address", "Asset", "Balance Native", "Balance USD"], positionRows(data.positions)),
+            formatTable(
+              ["Chain ID", "Protocol", "Protocol Address", "Asset", "Balance Native", "Balance USD"],
+              positionRows(data.positions),
+            ),
           );
         }
       } catch (error) {

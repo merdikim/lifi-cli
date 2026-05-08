@@ -106,6 +106,22 @@ lifi earn protocols                               # Protocols supported by Earn
 lifi earn positions 0xYOUR_ADDRESS                # Wallet Earn positions
 ```
 
+### Composer
+
+```bash
+lifi composer quote                         # Interactive mode: select a Composer vault first
+lifi composer quote --to 8453 --vault-asset USDC
+
+lifi composer quote \
+  --from 8453 --to 8453 \
+  --from-token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  --to-token 0x7BfA7C4f149E7415b73bdeDfe609237e29CBF34A \
+  --amount 1000000 \
+  --from-address 0xYOUR_ADDRESS
+
+lifi composer quote --from 1 --to 8453 --from-token ETH --to-token 0xVAULT --amount 100000000000000000 --json
+```
+
 ### API Key Management
 
 ```bash
@@ -190,6 +206,24 @@ lifi quote --from 1 --to 8453 --from-token USDC --to-token USDC --amount 1000000
 
 # 5. Track progress
 lifi status 0xTX_HASH --watch
+```
+
+## Example Workflow: Composer Deposit
+
+```bash
+# 1. Find Composer-supported target vaults
+lifi composer vaults --chain 8453 --asset USDC
+
+# 2a. Interactive: select a vault, then enter source token, amount, and wallet
+lifi composer quote --to 8453 --vault-asset USDC
+
+# 2b. Non-interactive: pass all required quote inputs, including the vault as --to-token
+lifi composer quote --from 8453 --to 8453 --from-token USDC --to-token 0xVAULT_ADDRESS --amount 1000000 --from-address 0xYOUR_ADDRESS --json
+
+# 3. (External) Approve estimate.approvalAddress if from-token is ERC-20, then sign transactionRequest
+
+# 4. For cross-chain deposits, track progress after broadcasting
+lifi status 0xTX_HASH --from-chain 1 --to-chain 8453 --watch
 ```
 
 ## Installation

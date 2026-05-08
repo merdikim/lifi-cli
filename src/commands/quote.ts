@@ -1,22 +1,14 @@
-import { input } from "@inquirer/prompts";
 import { type Command, Option } from "commander";
-import { ExitCode } from "../core/constants.js";
-import { CliError, handleError } from "../core/errors.js";
+import { handleError } from "../core/errors.js";
 import { formatAmount, formatTable, isJsonMode, jsonOutput } from "../core/formatter.js";
 import { api } from "../core/http-client.js";
 import { withSpinner } from "../core/interactive.js";
-import type { QuoteResponse, RouteOrder } from "../types/index.js";
+import type { QuoteParams, QuoteResponse, RouteOrder } from "../types/index.js";
+import { promptIfMissing } from "../core/prompt-if-missing.js";
 
-async function promptIfMissing(value: string | undefined, label: string): Promise<string> {
-  if (value) return value;
-  if (process.env["LIFI_NO_INPUT"] === "1") {
-    throw new CliError(
-      `Missing required option: ${label}`,
-      ExitCode.InvalidArgs,
-      "Pass all required flags when using --no-input",
-    );
-  }
-  return input({ message: `${label}:` });
+export async function fetchQuote(params: QuoteParams, message = "Fetching quote..."): Promise<QuoteResponse> {
+  const { data } = await withSpinner(message, () => api.get<QuoteResponse>("/quote", { params }));
+  return data;
 }
 
 export function registerQuoteCommand(program: Command): void {
@@ -58,7 +50,7 @@ Examples:
         const fromAmount = await promptIfMissing(options.amount, "--amount");
         const fromAddress = await promptIfMissing(options.fromAddress, "--from-address");
 
-        const params: Record<string, string> = {
+        const params: QuoteParams = {
           fromChain,
           toChain,
           fromToken,
@@ -67,11 +59,11 @@ Examples:
           fromAddress,
           slippage: options.slippage,
         };
-        if (options["order"]) params["order"] = options["order"] as string;
+        if (options["order"]) params.order = options["order"] as RouteOrder;
         if (options["allowBridges"]) params["allowBridges"] = options["allowBridges"] as string;
         if (options["allowExchanges"]) params["allowExchanges"] = options["allowExchanges"] as string;
 
-        const { data } = await withSpinner("Fetching quote...", () => api.get<QuoteResponse>("/quote", { params }));
+        const data = await fetchQuote(params);
 
         if (isJsonMode(opts)) {
           console.log(jsonOutput(data));

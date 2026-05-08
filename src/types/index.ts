@@ -65,6 +65,7 @@ export interface QuoteEstimate {
   toAmount: string;
   toAmountMin?: string;
   toAmountDecimals?: number;
+  approvalAddress?: string;
   fromAmountUSD?: string;
   toAmountUSD?: string;
   executionDuration?: number;
@@ -88,6 +89,22 @@ export interface QuoteResponse {
   estimate?: QuoteEstimate;
   transactionRequest?: Record<string, unknown>;
   includedSteps?: Step[];
+}
+
+export interface QuoteParams {
+  fromChain: string;
+  toChain: string;
+  fromToken: string;
+  toToken: string;
+  fromAmount: string;
+  fromAddress: string;
+  toAddress?: string;
+  slippage: string;
+  order?: RouteOrder;
+  allowBridges?: string;
+  denyBridges?: string;
+  allowExchanges?: string;
+  denyExchanges?: string;
 }
 
 // --- Route types ---
