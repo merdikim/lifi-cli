@@ -126,6 +126,18 @@ export interface RoutesResponse {
   routes: Route[];
 }
 
+export interface RoutesParams {
+  fromChainId: string;
+  toChainId: string;
+  fromTokenAddress: string;
+  toTokenAddress: string;
+  fromAmount: string;
+  fromAddress: string;
+  options?: {
+    order?: RouteOrder;
+  };
+}
+
 // --- Route order ---
 
 export type RouteOrder = "CHEAPEST" | "FASTEST" | "SAFEST" | "RECOMMENDED";

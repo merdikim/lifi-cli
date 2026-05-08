@@ -5,9 +5,19 @@ import { CliError, handleError } from "../core/errors.js";
 import { formatAmount, formatDuration, formatTable, isJsonMode, jsonOutput } from "../core/formatter.js";
 import { earnApi } from "../core/http-client.js";
 import { withSpinner } from "../core/interactive.js";
-import type { EarnVault, EarnVaultsResponse, QuoteParams, QuoteResponse, RouteOrder, Step } from "../types/index.js";
-import { fetchQuote } from "./quote.js";
 import { promptIfMissing } from "../core/prompt-if-missing.js";
+import type {
+  EarnVault,
+  EarnVaultsResponse,
+  QuoteParams,
+  QuoteResponse,
+  Route,
+  RouteOrder,
+  RoutesParams,
+  Step,
+} from "../types/index.js";
+import { fetchQuote } from "./quote.js";
+import { fetchRoutes, routeRows } from "./routes.js";
 
 const COMPOSER_TOOL = "composer";
 
@@ -102,6 +112,27 @@ function quoteRows(quote: QuoteResponse, slippage: string): string[][] {
   ];
 }
 
+function routeLabel(route: Route, index: number): string {
+  const steps = route.steps.map((step) => step.tool).join(" -> ");
+  const receive = route.toAmountUSD ? `$${route.toAmountUSD}` : "N/A";
+  const gas = route.gasCostUSD ? `$${route.gasCostUSD}` : "N/A";
+  return `${index + 1}. ${steps} | receive ${receive} | gas ${gas}`;
+}
+
+async function selectRoute(routes: Route[]): Promise<Route> {
+  if (routes.length === 0) {
+    throw new CliError("No routes returned", ExitCode.General, "Try a different vault, token, amount, or route order.");
+  }
+
+  return select<Route>({
+    message: "Select route:",
+    choices: routes.map((route, index) => ({
+      name: routeLabel(route, index),
+      value: route,
+    })),
+  });
+}
+
 export function registerComposerCommand(program: Command): void {
   const composer = program
     .command("composer")
@@ -125,6 +156,8 @@ Examples:
     .option("--from-address <address>", "Sender wallet address (0x...)")
     .option("--to-address <address>", "Recipient wallet address. Defaults to --from-address")
     .option("--vault-limit <count>", "Interactive mode: maximum vaults to show", "20")
+    .option("--routes", "Fetch Composer route options instead of a single quote")
+    //.option("--allow-standard-route", "Do not fail if LI.FI returns a non-Composer route")
     .option("--slippage <slippage>", "Max slippage as decimal (e.g. 0.005 for 0.5%)", "0.005")
     .addOption(
       new Option("--order <order>", "Route preference").choices([
@@ -137,20 +170,57 @@ Examples:
     .action(async (options, command) => {
       const opts = command.optsWithGlobals();
       try {
+        const selectedVault =
+          options.toToken || process.env["LIFI_NO_INPUT"] === "1"
+            ? undefined
+            : await selectComposerVault({ to: options.to, vaultLimit: options.vaultLimit });
+        const selectedVaultAddress = options.toToken || selectedVault?.address;
+        if (!selectedVaultAddress) {
+          throw new CliError(
+            "No valid selected vault",
+            ExitCode.General,
+            "Run lifi earn vaults --json to inspect vaults payloads.",
+          );
+        }
+
         const fromChain = await promptIfMissing(options.from, "--from (source chain)");
-        const toChain = await promptIfMissing(options.to, "--to (destination chain)");
+        const toChain = await promptIfMissing(
+          options.to ?? (selectedVault ? String(selectedVault.chainId) : undefined),
+          "--to (destination chain)",
+        );
         const fromToken = await promptIfMissing(options.fromToken, "--from-token");
         const fromAmount = await promptIfMissing(options.amount, "--amount");
         const fromAddress = await promptIfMissing(options.fromAddress, "--from-address");
         const toAddress = options.toAddress || fromAddress;
 
-        const selectedVaultAddress = options.toToken || (await selectComposerVault({to: toChain, vaultLimit: options.vaultLimit})).address
-        if (!selectedVaultAddress) {
-          throw new CliError(
-            "No valid selelcted vault",
-            ExitCode.General,
-            "Run lifi earn vaults --json to inspect vaults payloads.",
-          );
+        if (options.routes) {
+          const body: RoutesParams = {
+            fromChainId: fromChain,
+            toChainId: toChain,
+            fromTokenAddress: fromToken,
+            toTokenAddress: selectedVaultAddress,
+            fromAmount,
+            fromAddress,
+          };
+          if (options.order) body.options = { order: options.order as RouteOrder };
+
+          const data = await fetchRoutes(body, "Fetching Composer routes...");
+
+          if (isJsonMode(opts)) {
+            console.log(jsonOutput(data));
+          } else {
+            const routes: Route[] = data.routes ?? [];
+            console.log(formatTable(["#", "Steps", "You Receive (USD)", "Gas Cost"], routeRows(routes)));
+            const selectedRoute = await selectRoute(routes);
+            console.log(
+              formatTable(
+                ["Field", "Value"],
+                [["Selected route", routeLabel(selectedRoute, routes.indexOf(selectedRoute))]],
+              ),
+            );
+            console.log("\n  Use --json to get the full routes response.");
+          }
+          return;
         }
 
         const params: QuoteParams = {
@@ -192,4 +262,5 @@ Examples:
       } catch (error) {
         handleError(error);
       }
-    })}
+    });
+}

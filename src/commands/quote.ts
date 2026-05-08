@@ -3,8 +3,8 @@ import { handleError } from "../core/errors.js";
 import { formatAmount, formatTable, isJsonMode, jsonOutput } from "../core/formatter.js";
 import { api } from "../core/http-client.js";
 import { withSpinner } from "../core/interactive.js";
-import type { QuoteParams, QuoteResponse, RouteOrder } from "../types/index.js";
 import { promptIfMissing } from "../core/prompt-if-missing.js";
+import type { QuoteParams, QuoteResponse, RouteOrder } from "../types/index.js";
 
 export async function fetchQuote(params: QuoteParams, message = "Fetching quote..."): Promise<QuoteResponse> {
   const { data } = await withSpinner(message, () => api.get<QuoteResponse>("/quote", { params }));

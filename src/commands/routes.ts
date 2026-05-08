@@ -3,7 +3,21 @@ import { handleError } from "../core/errors.js";
 import { formatTable, isJsonMode, jsonOutput } from "../core/formatter.js";
 import { api } from "../core/http-client.js";
 import { withSpinner } from "../core/interactive.js";
-import type { Route, RouteOrder, RoutesResponse } from "../types/index.js";
+import type { Route, RouteOrder, RoutesParams, RoutesResponse } from "../types/index.js";
+
+export async function fetchRoutes(body: RoutesParams, message = "Fetching routes..."): Promise<RoutesResponse> {
+  const { data } = await withSpinner(message, () => api.post<RoutesResponse>("/advanced/routes", body));
+  return data;
+}
+
+export function routeRows(routes: Route[]): string[][] {
+  return routes.map((route, index) => [
+    String(index + 1),
+    route.steps.map((step: { tool: string }) => step.tool).join(" → "),
+    route.toAmountUSD ? `$${route.toAmountUSD}` : "N/A",
+    route.gasCostUSD ? `$${route.gasCostUSD}` : "N/A",
+  ]);
+}
 
 export function registerRoutesCommand(program: Command): void {
   program
@@ -33,31 +47,23 @@ Examples:
     .action(async (options, command) => {
       const opts = command.optsWithGlobals();
       try {
-        const body = {
+        const body: RoutesParams = {
           fromChainId: options.from,
           toChainId: options.to,
           fromTokenAddress: options.fromToken,
           toTokenAddress: options.toToken,
           fromAmount: options.amount,
           fromAddress: options.fromAddress || "0x0000000000000000000000000000000000000000",
-          options: options.order ? { order: options.order } : undefined,
         };
+        if (options.order) body.options = { order: options.order as RouteOrder };
 
-        const { data } = await withSpinner("Fetching routes...", () =>
-          api.post<RoutesResponse>("/advanced/routes", body),
-        );
+        const data = await fetchRoutes(body);
 
         if (isJsonMode(opts)) {
           console.log(jsonOutput(data));
         } else {
           const routes: Route[] = data.routes ?? [];
-          const rows = routes.map((r, i) => [
-            String(i + 1),
-            r.steps.map((s: { tool: string }) => s.tool).join(" → "),
-            r.toAmountUSD ? `$${r.toAmountUSD}` : "N/A",
-            r.gasCostUSD ? `$${r.gasCostUSD}` : "N/A",
-          ]);
-          console.log(formatTable(["#", "Steps", "You Receive (USD)", "Gas Cost"], rows));
+          console.log(formatTable(["#", "Steps", "You Receive (USD)", "Gas Cost"], routeRows(routes)));
         }
       } catch (error) {
         handleError(error);
