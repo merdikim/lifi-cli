@@ -1,7 +1,8 @@
 import { select } from "@inquirer/prompts";
 import { type Command, Option } from "commander";
-import { ExitCode } from "../core/constants.js";
+import { COMPOSER_TOOL, ExitCode } from "../core/constants.js";
 import { CliError, handleError } from "../core/errors.js";
+import { createWallet, ensureAllowance, sendTransactionRequest } from "../core/evm-execution.js";
 import { formatAmount, formatDuration, formatTable, isJsonMode, jsonOutput } from "../core/formatter.js";
 import { earnApi } from "../core/http-client.js";
 import { withSpinner } from "../core/interactive.js";
@@ -9,17 +10,18 @@ import { promptIfMissing } from "../core/prompt-if-missing.js";
 import type {
   EarnVault,
   EarnVaultsResponse,
+  ExecutionConfig,
+  ExecutionWallet,
   QuoteParams,
   QuoteResponse,
   Route,
   RouteOrder,
   RoutesParams,
+  SendTransactionResult,
   Step,
 } from "../types/index.js";
 import { fetchQuote } from "./quote.js";
-import { fetchRoutes, routeRows } from "./routes.js";
-
-const COMPOSER_TOOL = "composer";
+import { fetchRoutes, fetchStepTransaction, routeRows } from "./routes.js";
 
 function includesComposerStep(quote: QuoteResponse): boolean {
   if (quote.tool === COMPOSER_TOOL || quote.toolDetails?.key === COMPOSER_TOOL) return true;
@@ -47,20 +49,13 @@ async function fetchComposerVaults(params: Record<string, string | boolean>): Pr
   return data.data;
 }
 
-async function selectComposerVault(options: {
-  to?: string;
-  vaultAsset?: string;
-  vaultProtocol?: string;
-  vaultLimit?: string;
-}) {
+async function selectComposerVault(options: { to?: string; vaultLimit?: string }) {
   const params: Record<string, string | boolean> = {
     isComposerSupported: true,
     isTransactional: true,
     limit: options.vaultLimit ?? "20",
   };
   if (options.to) params["chainId"] = options.to;
-  if (options.vaultAsset) params["asset"] = options.vaultAsset;
-  if (options.vaultProtocol) params["protocol"] = options.vaultProtocol;
 
   const vaults = await fetchComposerVaults(params);
   if (vaults.length === 0) {
@@ -133,6 +128,22 @@ async function selectRoute(routes: Route[]): Promise<Route> {
   });
 }
 
+function firstRouteStep(route: Route): Step {
+  const step = route.steps[0];
+  if (!step) {
+    throw new CliError("Selected route does not include an executable step", ExitCode.General);
+  }
+  return step;
+}
+
+function executionRows(result: SendTransactionResult, approvalHash?: string): string[][] {
+  return [
+    ["Approval tx", approvalHash ?? "N/A"],
+    ["Transaction hash", result.hash],
+    ["Block", result.blockNumber !== undefined ? String(result.blockNumber) : "Pending"],
+  ];
+}
+
 export function registerComposerCommand(program: Command): void {
   const composer = program
     .command("composer")
@@ -141,23 +152,29 @@ export function registerComposerCommand(program: Command): void {
       "after",
       `
 Examples:
-  $ lifi composer vaults --chain 8453 --asset USDC
-  $ lifi composer quote --from 8453 --to 8453 --from-token 0x8335... --to-token 0x7BfA... --amount 1000000 --from-address 0xd8dA...
-  $ lifi composer quote --from 1 --to 8453 --from-token ETH --to-token 0x7BfA... --amount 100000000000000000 --json`,
+  $ lifi composer --to 8453
+  $ lifi composer --from 8453 --to 8453 --from-token 0x8335... --to-token 0x7BfA... --amount 1000000
+  $ lifi composer --from 1 --to 8453 --from-token ETH --to-token 0x7BfA... --amount 100000000000000000 --json`,
     );
 
   composer
-    .description("execute composer")
+    .description("Execute LI.FI Composer deposits")
     .option("--from <chain>", "Source chain name or ID (e.g. base, 8453)")
     .option("--to <chain>", "Destination chain name or ID. Same as --from for same-chain deposits")
     .option("--from-token <token>", "Token to deposit from — symbol or address")
-    .option("--to-token <token>", "Composer target token address, such as a vault/staking/deposit token")
+    .option("--to-token <token>", "Composer target token address")
     .option("--amount <amount>", "Amount in from-token smallest unit (e.g. 1000000 for 1 USDC)")
-    .option("--from-address <address>", "Sender wallet address (0x...)")
-    .option("--to-address <address>", "Recipient wallet address. Defaults to --from-address")
+    .option("--from-wallet <address>", "Sender wallet address. Enables WalletConnect signing")
+    .option("--to-address <address>", "Recipient wallet address. Defaults to signer wallet address")
     .option("--vault-limit <count>", "Interactive mode: maximum vaults to show", "20")
     .option("--routes", "Fetch Composer route options instead of a single quote")
-    //.option("--allow-standard-route", "Do not fail if LI.FI returns a non-Composer route")
+    .option("--wallet-connect", "Use WalletConnect QR signing instead of a private key")
+    .option(
+      "--wallet-connect-project-id <id>",
+      "WalletConnect project ID. Defaults to WALLETCONNECT_PROJECT_ID or WC_PROJECT_ID",
+    )
+    .option("--wallet-path <path>", "Path to a file containing the private key. Defaults to PRIVATE_KEY env var")
+    .option("--rpc-url <url>", "RPC URL used for transaction execution. Defaults to bundled public RPC by chain ID")
     .option("--slippage <slippage>", "Max slippage as decimal (e.g. 0.005 for 0.5%)", "0.005")
     .addOption(
       new Option("--order <order>", "Route preference").choices([
@@ -173,7 +190,10 @@ Examples:
         const selectedVault =
           options.toToken || process.env["LIFI_NO_INPUT"] === "1"
             ? undefined
-            : await selectComposerVault({ to: options.to, vaultLimit: options.vaultLimit });
+            : await selectComposerVault({
+                to: options.to,
+                vaultLimit: options.vaultLimit,
+              });
         const selectedVaultAddress = options.toToken || selectedVault?.address;
         if (!selectedVaultAddress) {
           throw new CliError(
@@ -190,7 +210,26 @@ Examples:
         );
         const fromToken = await promptIfMissing(options.fromToken, "--from-token");
         const fromAmount = await promptIfMissing(options.amount, "--amount");
-        const fromAddress = await promptIfMissing(options.fromAddress, "--from-address");
+        const useWalletConnect = Boolean(options.walletConnect || options.fromWallet);
+        const executionConfig: ExecutionConfig = {
+          walletPath: options.walletPath,
+          rpcUrl: options.rpcUrl,
+          walletConnect: useWalletConnect,
+          walletConnectProjectId: '37d39d9a3b9eb46fd7c703c77c72b31b' //options.walletConnectProjectId,
+        };
+        let wallet: ExecutionWallet | undefined;
+        const getWallet = async (): Promise<ExecutionWallet> => {
+          wallet ??= await createWallet(executionConfig, fromChain);
+          if (options.fromWallet && wallet.address.toLowerCase() !== options.fromWallet.toLowerCase()) {
+            throw new CliError(
+              "WalletConnect account does not match --from-wallet",
+              ExitCode.InvalidArgs,
+              `Connected wallet ${wallet.address}, but quote was requested for ${options.fromWallet}.`,
+            );
+          }
+          return wallet;
+        };
+        const fromAddress = options.fromWallet || (await getWallet()).address;
         const toAddress = options.toAddress || fromAddress;
 
         if (options.routes) {
@@ -206,19 +245,41 @@ Examples:
 
           const data = await fetchRoutes(body, "Fetching Composer routes...");
 
-          if (isJsonMode(opts)) {
-            console.log(jsonOutput(data));
-          } else {
-            const routes: Route[] = data.routes ?? [];
+          const routes: Route[] = data.routes ?? [];
+          if (!isJsonMode(opts)) {
             console.log(formatTable(["#", "Steps", "You Receive (USD)", "Gas Cost"], routeRows(routes)));
-            const selectedRoute = await selectRoute(routes);
+          }
+          const selectedRoute = await selectRoute(routes);
+          if (!isJsonMode(opts)) {
             console.log(
               formatTable(
                 ["Field", "Value"],
                 [["Selected route", routeLabel(selectedRoute, routes.indexOf(selectedRoute))]],
               ),
             );
-            console.log("\n  Use --json to get the full routes response.");
+          }
+          const step = firstRouteStep(selectedRoute);
+          let executableStep = await fetchStepTransaction(step);
+          const executionWallet = await getWallet();
+          const approval = await ensureAllowance(
+            executionWallet,
+            executableStep.action ?? step.action,
+            executableStep.estimate ?? step.estimate,
+          );
+          if (approval.approved) {
+            executableStep = await fetchStepTransaction(step, "Refreshing route transaction...");
+          }
+          const result = await sendTransactionRequest(executionWallet, executableStep.transactionRequest);
+          if (isJsonMode(opts)) {
+            console.log(
+              jsonOutput({
+                approvalHash: approval.hash,
+                transactionHash: result.hash,
+                blockNumber: result.blockNumber,
+              }),
+            );
+          } else {
+            console.log(formatTable(["Field", "Value"], executionRows(result, approval.hash)));
           }
           return;
         }
@@ -239,25 +300,30 @@ Examples:
         const data = await fetchQuote(params, "Fetching Composer quote...");
         const isComposer = includesComposerStep(data);
 
-        if (!isComposer && !options.allowStandardRoute) {
+        if (!isComposer) {
           throw new CliError(
             "LI.FI did not return a Composer route for this to-token",
             ExitCode.General,
-            "Use a Composer-supported vault/staking/deposit token address, or pass --allow-standard-route to inspect the returned quote.",
+            "Use a Composer-supported vault/staking/deposit token address.",
           );
         }
 
-        if (isJsonMode(opts)) {
-          console.log(jsonOutput(data));
-        } else {
+        if (!isJsonMode(opts)) {
           console.log(formatTable(["Field", "Value"], quoteRows(data, options.slippage)));
-          console.log("\n  This CLI is read-only: approve if needed, then sign transactionRequest with your wallet.");
-          if (data.action?.fromChainId !== data.action?.toChainId) {
-            console.log(
-              "  After broadcasting, track with: lifi status <txHash> --from-chain <fromChain> --to-chain <toChain> --watch",
-            );
-          }
-          console.log("  Use --json to get the full transactionRequest object.");
+        }
+        const executionWallet = await getWallet();
+        const approval = await ensureAllowance(executionWallet, data.action, data.estimate);
+        const result = await sendTransactionRequest(executionWallet, data.transactionRequest);
+        if (isJsonMode(opts)) {
+          console.log(
+            jsonOutput({
+              approvalHash: approval.hash,
+              transactionHash: result.hash,
+              blockNumber: result.blockNumber,
+            }),
+          );
+        } else {
+          console.log(formatTable(["Field", "Value"], executionRows(result, approval.hash)));
         }
       } catch (error) {
         handleError(error);

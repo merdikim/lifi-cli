@@ -1,3 +1,5 @@
+import type { JsonRpcProvider, Wallet } from "ethers";
+
 export interface GlobalOptions {
   json?: boolean;
   verbose?: boolean;
@@ -73,6 +75,56 @@ export interface QuoteEstimate {
   feeCosts?: Array<{ name?: string; amountUSD?: string; percentage?: string }>;
 }
 
+export interface TransactionRequest {
+  to?: string;
+  from?: string;
+  data?: string;
+  value?: string;
+  gasLimit?: string;
+  gasPrice?: string;
+  maxFeePerGas?: string;
+  maxPriorityFeePerGas?: string;
+  nonce?: number;
+  chainId?: number;
+}
+
+export interface ExecutionConfig {
+  walletPath?: string;
+  rpcUrl?: string;
+  walletConnect?: boolean;
+  walletConnectProjectId?: string;
+}
+
+export interface ApprovalResult {
+  approved: boolean;
+  hash?: string;
+}
+
+export interface SendTransactionResult {
+  hash: string;
+  blockNumber?: number;
+}
+
+export interface PrivateKeyExecutionWallet {
+  kind: "privateKey";
+  address: string;
+  provider: JsonRpcProvider;
+  signer: Wallet;
+}
+
+export interface WalletConnectRequestProvider {
+  request<T = unknown>(args: { method: string; params?: unknown[] }): Promise<T>;
+}
+
+export interface WalletConnectExecutionWallet {
+  kind: "walletConnect";
+  address: string;
+  provider: JsonRpcProvider;
+  walletConnectProvider: WalletConnectRequestProvider;
+}
+
+export type ExecutionWallet = PrivateKeyExecutionWallet | WalletConnectExecutionWallet;
+
 export interface QuoteAction {
   fromToken?: Token;
   toToken?: Token;
@@ -87,7 +139,7 @@ export interface QuoteResponse {
   toolDetails?: { key: string; name: string; logoURI?: string };
   action?: QuoteAction;
   estimate?: QuoteEstimate;
-  transactionRequest?: Record<string, unknown>;
+  transactionRequest?: TransactionRequest;
   includedSteps?: Step[];
 }
 
@@ -113,6 +165,9 @@ export interface Step {
   type: string;
   tool: string;
   toolDetails?: { key: string; name: string };
+  action?: QuoteAction;
+  estimate?: QuoteEstimate;
+  transactionRequest?: TransactionRequest;
 }
 
 export interface Route {

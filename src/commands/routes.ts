@@ -3,7 +3,7 @@ import { handleError } from "../core/errors.js";
 import { formatTable, isJsonMode, jsonOutput } from "../core/formatter.js";
 import { api } from "../core/http-client.js";
 import { withSpinner } from "../core/interactive.js";
-import type { Route, RouteOrder, RoutesParams, RoutesResponse } from "../types/index.js";
+import type { Route, RouteOrder, RoutesParams, RoutesResponse, Step } from "../types/index.js";
 
 export async function fetchRoutes(body: RoutesParams, message = "Fetching routes..."): Promise<RoutesResponse> {
   const { data } = await withSpinner(message, () => api.post<RoutesResponse>("/advanced/routes", body));
@@ -17,6 +17,11 @@ export function routeRows(routes: Route[]): string[][] {
     route.toAmountUSD ? `$${route.toAmountUSD}` : "N/A",
     route.gasCostUSD ? `$${route.gasCostUSD}` : "N/A",
   ]);
+}
+
+export async function fetchStepTransaction(step: Step, message = "Fetching route transaction..."): Promise<Step> {
+  const { data } = await withSpinner(message, () => api.post<Step>("/advanced/stepTransaction", step));
+  return data;
 }
 
 export function registerRoutesCommand(program: Command): void {

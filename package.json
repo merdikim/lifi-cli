@@ -55,10 +55,15 @@
   "packageManager": "pnpm@10.33.0",
   "dependencies": {
     "@inquirer/prompts": "^8.0.0",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@walletconnect/ethereum-provider": "^2.23.9",
     "axios": "^1.7.0",
     "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
-    "ora": "^8.1.0"
+    "ethers": "^6.16.0",
+    "ora": "^8.1.0",
+    "qrcode-terminal": "^0.12.0",
+    "viem": "^2.48.11"
   },
   "lint-staged": {
     "src/**/*.{ts,tsx}": [

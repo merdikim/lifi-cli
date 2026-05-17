@@ -20,13 +20,25 @@ vi.mock("@inquirer/prompts", () => ({
   select: vi.fn(),
 }));
 
+vi.mock("../core/evm-execution.js", () => ({
+  createWallet: vi.fn(() => ({
+    address: "0xabc",
+  })),
+  ensureAllowance: vi.fn().mockResolvedValue({ approved: false }),
+  sendTransactionRequest: vi.fn().mockResolvedValue({ hash: "0xtxhash", blockNumber: 123 }),
+}));
+
 import { input, select } from "@inquirer/prompts";
+import { createWallet, ensureAllowance, sendTransactionRequest } from "../core/evm-execution.js";
 import { api, earnApi } from "../core/http-client.js";
 
 const mockedApi = vi.mocked(api);
 const mockedEarnApi = vi.mocked(earnApi);
 const mockedInput = vi.mocked(input);
 const mockedSelect = vi.mocked(select);
+const mockedCreateWallet = vi.mocked(createWallet);
+const mockedEnsureAllowance = vi.mocked(ensureAllowance);
+const mockedSendTransactionRequest = vi.mocked(sendTransactionRequest);
 
 const COMPOSER_QUOTE_FIXTURE = {
   tool: "composer",
@@ -93,7 +105,6 @@ describe("composer command", () => {
       "node",
       "test",
       "composer",
-      "quote",
       "--from",
       "8453",
       "--to",
@@ -104,8 +115,6 @@ describe("composer command", () => {
       "0xto",
       "--amount",
       "1000000",
-      "--from-address",
-      "0xabc",
       "--json",
     ]);
 
@@ -125,9 +134,15 @@ describe("composer command", () => {
       }),
     );
     expect(mockedEarnApi.get).not.toHaveBeenCalled();
+    expect(mockedSendTransactionRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPOSER_QUOTE_FIXTURE.transactionRequest,
+    );
+    const parsed = JSON.parse(consoleOutput.join(""));
+    expect(parsed.transactionHash).toBe("0xtxhash");
   });
 
-  it("detects Composer in included steps for cross-chain routes", async () => {
+  it("accepts Composer in included steps for cross-chain routes", async () => {
     mockedApi.get.mockResolvedValue({
       data: {
         ...COMPOSER_QUOTE_FIXTURE,
@@ -141,7 +156,6 @@ describe("composer command", () => {
       "node",
       "test",
       "composer",
-      "quote",
       "--from",
       "1",
       "--to",
@@ -152,13 +166,11 @@ describe("composer command", () => {
       "0xto",
       "--amount",
       "100000000000000000",
-      "--from-address",
-      "0xabc",
       "--json",
     ]);
 
     const parsed = JSON.parse(consoleOutput.join(""));
-    expect(parsed.tool).toBe("stargateV2");
+    expect(parsed.transactionHash).toBe("0xtxhash");
   });
 
   it("rejects non-Composer quotes by default", async () => {
@@ -180,7 +192,6 @@ describe("composer command", () => {
         "node",
         "test",
         "composer",
-        "quote",
         "--from",
         "1",
         "--to",
@@ -191,46 +202,12 @@ describe("composer command", () => {
         "USDC",
         "--amount",
         "1000000",
-        "--from-address",
-        "0xabc",
         "--json",
       ]),
     ).rejects.toThrow("process.exit");
 
     expect(consoleError.join("\n")).toContain("LI.FI did not return a Composer route");
     exit.mockRestore();
-  });
-
-  it("lists Composer-supported vaults from Earn", async () => {
-    mockedEarnApi.get.mockResolvedValue({
-      data: {
-        data: [
-          {
-            chainId: 8453,
-            protocol: { name: "Morpho", logoUri: "", url: "" },
-            name: "Spark USDC",
-            address: "0xvault",
-            asset: { symbol: "USDC" },
-            tags: [],
-            isComposerSupported: true,
-          },
-        ],
-      },
-    });
-    const program = createProgram();
-
-    await program.parseAsync(["node", "test", "composer", "vaults", "--chain", "8453", "--asset", "USDC", "--json"]);
-
-    expect(mockedEarnApi.get).toHaveBeenCalledWith(
-      "/vaults",
-      expect.objectContaining({
-        params: expect.objectContaining({
-          isComposerSupported: true,
-          chainId: "8453",
-          asset: "USDC",
-        }),
-      }),
-    );
   });
 
   it("fetches vaults first and uses the selected vault in interactive mode", async () => {
@@ -246,15 +223,11 @@ describe("composer command", () => {
     };
     mockedEarnApi.get.mockResolvedValue({ data: { data: [vault] } });
     mockedSelect.mockResolvedValue(vault);
-    mockedInput
-      .mockResolvedValueOnce("8453")
-      .mockResolvedValueOnce("USDC")
-      .mockResolvedValueOnce("1000000")
-      .mockResolvedValueOnce("0xabc");
+    mockedInput.mockResolvedValueOnce("8453").mockResolvedValueOnce("USDC").mockResolvedValueOnce("1000000");
     mockedApi.get.mockResolvedValue({ data: COMPOSER_QUOTE_FIXTURE });
     const program = createProgram();
 
-    await program.parseAsync(["node", "test", "composer", "quote", "--json"]);
+    await program.parseAsync(["node", "test", "composer", "--json"]);
 
     expect(mockedEarnApi.get).toHaveBeenCalledWith(
       "/vaults",
@@ -276,7 +249,7 @@ describe("composer command", () => {
       }),
     );
     expect(mockedEarnApi.get.mock.invocationCallOrder[0]).toBeLessThan(mockedApi.get.mock.invocationCallOrder[0] ?? 0);
-    expect(mockedInput).toHaveBeenCalledTimes(4);
+    expect(mockedInput).toHaveBeenCalledTimes(3);
     expect(mockedApi.get).toHaveBeenCalledWith(
       "/quote",
       expect.objectContaining({
@@ -286,6 +259,10 @@ describe("composer command", () => {
           toToken: "0xvault",
         }),
       }),
+    );
+    expect(mockedSendTransactionRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPOSER_QUOTE_FIXTURE.transactionRequest,
     );
   });
 
@@ -300,16 +277,19 @@ describe("composer command", () => {
       isComposerSupported: true,
     };
     mockedEarnApi.get.mockResolvedValue({ data: { data: [vault] } });
-    mockedSelect.mockResolvedValue(vault);
-    mockedInput
-      .mockResolvedValueOnce("8453")
-      .mockResolvedValueOnce("USDC")
-      .mockResolvedValueOnce("1000000")
-      .mockResolvedValueOnce("0xabc");
-    mockedApi.post.mockResolvedValue({ data: COMPOSER_ROUTES_FIXTURE });
+    mockedSelect.mockResolvedValueOnce(vault).mockResolvedValueOnce(COMPOSER_ROUTES_FIXTURE.routes[0]);
+    mockedInput.mockResolvedValueOnce("8453").mockResolvedValueOnce("USDC").mockResolvedValueOnce("1000000");
+    mockedApi.post.mockResolvedValueOnce({ data: COMPOSER_ROUTES_FIXTURE }).mockResolvedValueOnce({
+      data: {
+        ...COMPOSER_ROUTES_FIXTURE.routes[0].steps[0],
+        action: COMPOSER_QUOTE_FIXTURE.action,
+        estimate: COMPOSER_QUOTE_FIXTURE.estimate,
+        transactionRequest: COMPOSER_QUOTE_FIXTURE.transactionRequest,
+      },
+    });
     const program = createProgram();
 
-    await program.parseAsync(["node", "test", "composer", "quote", "--routes", "--json"]);
+    await program.parseAsync(["node", "test", "composer", "--routes", "--json"]);
 
     expect(mockedApi.post).toHaveBeenCalledWith(
       "/advanced/routes",
@@ -324,7 +304,7 @@ describe("composer command", () => {
     );
     expect(mockedApi.get).not.toHaveBeenCalledWith("/quote", expect.anything());
     const parsed = JSON.parse(consoleOutput.join(""));
-    expect(parsed.routes).toHaveLength(2);
+    expect(parsed.transactionHash).toBe("0xtxhash");
   });
 
   it("allows selecting a returned route in interactive routes mode", async () => {
@@ -343,16 +323,12 @@ describe("composer command", () => {
     const selectedRoute = COMPOSER_ROUTES_FIXTURE.routes[1];
     mockedEarnApi.get.mockResolvedValue({ data: { data: [vault] } });
     mockedSelect.mockResolvedValueOnce(vault).mockResolvedValueOnce(selectedRoute);
-    mockedInput
-      .mockResolvedValueOnce("8453")
-      .mockResolvedValueOnce("USDC")
-      .mockResolvedValueOnce("1000000")
-      .mockResolvedValueOnce("0xabc");
+    mockedInput.mockResolvedValueOnce("8453").mockResolvedValueOnce("USDC").mockResolvedValueOnce("1000000");
     mockedApi.post.mockResolvedValue({ data: COMPOSER_ROUTES_FIXTURE });
     const program = createProgram();
 
     try {
-      await program.parseAsync(["node", "test", "composer", "quote", "--routes"]);
+      await program.parseAsync(["node", "test", "composer", "--routes"]);
     } finally {
       if (originalIsTTY) Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
       else Reflect.deleteProperty(process.stdout, "isTTY");
@@ -370,5 +346,142 @@ describe("composer command", () => {
     );
     expect(consoleOutput.join("\n")).toContain("Selected route");
     expect(consoleOutput.join("\n")).toContain("2. across -> composer | receive $99.50 | gas $0.18");
+  });
+
+  it("executes a Composer quote by default", async () => {
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    mockedApi.get.mockResolvedValue({ data: COMPOSER_QUOTE_FIXTURE });
+    const program = createProgram();
+
+    try {
+      await program.parseAsync([
+        "node",
+        "test",
+        "composer",
+        "--from",
+        "8453",
+        "--to",
+        "8453",
+        "--from-token",
+        "0xfrom",
+        "--to-token",
+        "0xto",
+        "--amount",
+        "1000000",
+        "--wallet-path",
+        "/tmp/wallet-key",
+        "--rpc-url",
+        "https://rpc.example",
+      ]);
+    } finally {
+      if (originalIsTTY) Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
+      else Reflect.deleteProperty(process.stdout, "isTTY");
+    }
+
+    expect(mockedCreateWallet).toHaveBeenCalledWith(
+      expect.objectContaining({ walletPath: "/tmp/wallet-key", rpcUrl: "https://rpc.example" }),
+      "8453",
+    );
+    expect(mockedEnsureAllowance).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPOSER_QUOTE_FIXTURE.action,
+      COMPOSER_QUOTE_FIXTURE.estimate,
+    );
+    expect(mockedSendTransactionRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPOSER_QUOTE_FIXTURE.transactionRequest,
+    );
+    expect(consoleOutput.join("\n")).toContain("0xtxhash");
+  });
+
+  it("uses --from-wallet as quote sender and WalletConnect execution without private key lookup", async () => {
+    mockedApi.get.mockResolvedValue({ data: COMPOSER_QUOTE_FIXTURE });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "composer",
+      "--from",
+      "8453",
+      "--to",
+      "8453",
+      "--from-token",
+      "0xfrom",
+      "--to-token",
+      "0xto",
+      "--amount",
+      "1000000",
+      "--from-wallet",
+      "0xabc",
+      "--wallet-connect-project-id",
+      "wc-project",
+      "--json",
+    ]);
+
+    expect(mockedApi.get).toHaveBeenCalledWith(
+      "/quote",
+      expect.objectContaining({
+        params: expect.objectContaining({
+          fromAddress: "0xabc",
+          toAddress: "0xabc",
+        }),
+      }),
+    );
+    expect(mockedApi.get.mock.invocationCallOrder[0]).toBeLessThan(mockedCreateWallet.mock.invocationCallOrder[0] ?? 0);
+    expect(mockedCreateWallet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletConnect: true,
+        walletConnectProjectId: "wc-project",
+      }),
+      "8453",
+    );
+    expect(mockedSendTransactionRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPOSER_QUOTE_FIXTURE.transactionRequest,
+    );
+  });
+
+  it("fetches step transaction and executes the selected route by default in routes mode", async () => {
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    const vault = {
+      chainId: 8453,
+      protocol: { name: "Morpho", logoUri: "", url: "" },
+      name: "Spark USDC",
+      address: "0xvault",
+      asset: { symbol: "USDC" },
+      tags: [],
+      isComposerSupported: true,
+    };
+    const selectedRoute = COMPOSER_ROUTES_FIXTURE.routes[0];
+    const stepWithTransaction = {
+      ...selectedRoute.steps[0],
+      action: COMPOSER_QUOTE_FIXTURE.action,
+      estimate: COMPOSER_QUOTE_FIXTURE.estimate,
+      transactionRequest: COMPOSER_QUOTE_FIXTURE.transactionRequest,
+    };
+    mockedEarnApi.get.mockResolvedValue({ data: { data: [vault] } });
+    mockedSelect.mockResolvedValueOnce(vault).mockResolvedValueOnce(selectedRoute);
+    mockedInput.mockResolvedValueOnce("8453").mockResolvedValueOnce("USDC").mockResolvedValueOnce("1000000");
+    mockedApi.post
+      .mockResolvedValueOnce({ data: COMPOSER_ROUTES_FIXTURE })
+      .mockResolvedValueOnce({ data: stepWithTransaction });
+    const program = createProgram();
+
+    try {
+      await program.parseAsync(["node", "test", "composer", "--routes"]);
+    } finally {
+      if (originalIsTTY) Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
+      else Reflect.deleteProperty(process.stdout, "isTTY");
+    }
+
+    expect(mockedApi.post).toHaveBeenCalledWith("/advanced/stepTransaction", selectedRoute.steps[0]);
+    expect(mockedSendTransactionRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPOSER_QUOTE_FIXTURE.transactionRequest,
+    );
+    expect(consoleOutput.join("\n")).toContain("0xtxhash");
   });
 });

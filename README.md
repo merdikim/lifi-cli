@@ -1,6 +1,6 @@
 # LI.FI CLI
 
-> **Note:** This CLI provides **read-only** tools — it does not sign or broadcast transactions. Quote responses include unsigned `transactionRequest` objects that must be signed and submitted externally using your own wallet.
+> **Note:** Most commands are read-only. `lifi composer` approves ERC-20 allowances and broadcasts transactions using `PRIVATE_KEY`, `--wallet-path`, or WalletConnect QR signing plus an RPC URL.
 
 A TypeScript CLI that wraps the [LI.FI REST API](https://li.quest) to give developers, integrators, and internal teams a scriptable, human-readable interface to cross-chain swap infrastructure.
 
@@ -109,17 +109,21 @@ lifi earn positions 0xYOUR_ADDRESS                # Wallet Earn positions
 ### Composer
 
 ```bash
-lifi composer quote                         # Interactive mode: select a Composer vault first
-lifi composer quote --to 8453 --vault-asset USDC
+lifi composer                               # Interactive mode: select a Composer vault first
+lifi composer --to 8453
 
-lifi composer quote \
+lifi composer \
   --from 8453 --to 8453 \
   --from-token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
   --to-token 0x7BfA7C4f149E7415b73bdeDfe609237e29CBF34A \
-  --amount 1000000 \
-  --from-address 0xYOUR_ADDRESS
+  --amount 1000000
 
-lifi composer quote --from 1 --to 8453 --from-token ETH --to-token 0xVAULT --amount 100000000000000000 --json
+lifi composer --from 1 --to 8453 --from-token ETH --to-token 0xVAULT --amount 100000000000000000 --json
+
+PRIVATE_KEY=0x... lifi composer --from 8453 --to 8453 --from-token USDC --to-token 0xVAULT --amount 1000000
+PRIVATE_KEY=0x... lifi composer --routes --from 8453 --to 8453 --from-token USDC --amount 1000000
+
+WALLETCONNECT_PROJECT_ID=... lifi composer --from-wallet 0xYOUR_ADDRESS --from 8453 --to 8453 --from-token USDC --to-token 0xVAULT --amount 1000000
 ```
 
 ### API Key Management
@@ -163,6 +167,10 @@ All configuration is via environment variables. No config files needed.
 ```bash
 # LI.FI API key (higher rate limits)
 export LIFI_API_KEY=your_key_here
+
+# Composer transaction signing
+export PRIVATE_KEY=0x...
+export WALLETCONNECT_PROJECT_ID=your_walletconnect_project_id
 ```
 
 Without `LIFI_API_KEY`, the CLI uses public rate limits (200 req/2hr). With a key, you get 200 req/min.
@@ -211,16 +219,17 @@ lifi status 0xTX_HASH --watch
 ## Example Workflow: Composer Deposit
 
 ```bash
-# 1. Find Composer-supported target vaults
-lifi composer vaults --chain 8453 --asset USDC
+# 1a. Interactive: select a vault, then enter source token and amount
+lifi composer --to 8453
 
-# 2a. Interactive: select a vault, then enter source token, amount, and wallet
-lifi composer quote --to 8453 --vault-asset USDC
+# 1b. Non-interactive: pass all required inputs, including the vault as --to-token
+lifi composer --from 8453 --to 8453 --from-token USDC --to-token 0xVAULT_ADDRESS --amount 1000000 --json
 
-# 2b. Non-interactive: pass all required quote inputs, including the vault as --to-token
-lifi composer quote --from 8453 --to 8453 --from-token USDC --to-token 0xVAULT_ADDRESS --amount 1000000 --from-address 0xYOUR_ADDRESS --json
+# 2. Use --wallet-path instead of PRIVATE_KEY if you keep the private key in a file
+lifi composer --wallet-path ./wallet.key --from 8453 --to 8453 --from-token USDC --to-token 0xVAULT_ADDRESS --amount 1000000
 
-# 3. (External) Approve estimate.approvalAddress if from-token is ERC-20, then sign transactionRequest
+# 3. Or scan a WalletConnect QR code and sign from your wallet
+WALLETCONNECT_PROJECT_ID=... lifi composer --from-wallet 0xYOUR_ADDRESS --from 8453 --to 8453 --from-token USDC --to-token 0xVAULT_ADDRESS --amount 1000000
 
 # 4. For cross-chain deposits, track progress after broadcasting
 lifi status 0xTX_HASH --from-chain 1 --to-chain 8453 --watch
