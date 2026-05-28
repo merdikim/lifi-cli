@@ -5,6 +5,11 @@ import { api } from "../core/http-client.js";
 import { withSpinner } from "../core/interactive.js";
 import type { Token, TokensResponse } from "../types/index.js";
 
+export async function getTokens(chainId: string): Promise<Token[]> {
+  const { data } = await api.get<TokensResponse>("/tokens", { params: { chains: chainId } });
+  return data.tokens[chainId] ?? [];
+}
+
 export function registerTokensCommand(program: Command): void {
   program
     .command("tokens")

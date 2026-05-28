@@ -1,10 +1,13 @@
 import { input, select } from "@inquirer/prompts";
 import axios, { type AxiosInstance } from "axios";
 import { type Command, Option } from "commander";
+import { parseUnits } from "viem";
 import { ExitCode } from "../core/constants.js";
 import { CliError, handleError, mapAxiosError } from "../core/errors.js";
 import { formatTable, isJsonMode, jsonOutput } from "../core/formatter.js";
 import { withSpinner } from "../core/interactive.js";
+import type { Token } from "../types/index.js";
+import { getTokens } from "./tokens.js";
 
 type IntentType = "exact-input" | "exact-output";
 
@@ -20,10 +23,28 @@ interface SupportedIntentChain {
 interface IntentOptions {
   fromChain: string;
   toChain: string;
+  fromToken: Token;
+  toToken: Token;
+  amount: string;
+  type: IntentType;
+}
+
+interface IntentCommandOptions {
+  fromChain: string;
+  toChain: string;
   fromToken: string;
   toToken: string;
   amount: string;
-  type: IntentType;
+  type: string;
+}
+
+interface RawIntentOptions {
+  fromChain: string;
+  toChain: string;
+  fromToken: Token;
+  toToken: Token;
+  amount: string;
+  type: string;
 }
 
 const INTENTS_API_BASE_URL = "https://order.li.fi";
@@ -68,6 +89,10 @@ function formatChainOption(chain: SupportedIntentChain): string {
   return `${chain.name} (${chain.chainType}, ${chain.chainId})`;
 }
 
+function formatTokenOption(token: Token): string {
+  return `${token.symbol} - ${token.name} (${token.address})`;
+}
+
 function findSupportedChain(value: string, chains: SupportedIntentChain[]): SupportedIntentChain | undefined {
   const normalized = value.trim().toLowerCase();
   return chains.find(
@@ -75,22 +100,53 @@ function findSupportedChain(value: string, chains: SupportedIntentChain[]): Supp
   );
 }
 
+function findSupportedToken(value: string, tokens: Token[]): Token | undefined {
+  const trimmed = value.trim();
+  const normalized = trimmed.toLowerCase();
+  return tokens.find(
+    (token) =>
+      (String(token.address).startsWith("0x")
+        ? String(token.address).toLowerCase() === normalized
+        : String(token.address) === trimmed) ||
+      String(token.symbol).toLowerCase() === normalized ||
+      String(token.name).toLowerCase() === normalized,
+  );
+}
+
+function findIntentType(value: string, types: readonly IntentType[]): IntentType | undefined {
+  const normalized = value.trim().toLowerCase();
+  return types.find((type) => type === normalized);
+}
+
+function formatSupportedChoices<T>(choices: readonly T[], formatChoice: (choice: T) => string): string {
+  const shownChoices = choices.slice(0, 20).map(formatChoice);
+  const remaining = choices.length - shownChoices.length;
+  if (remaining > 0) {
+    shownChoices.push(`and ${remaining} more`);
+  }
+  return shownChoices.join(", ");
+}
+
 async function selectIfMissing<T>(
   value: string | undefined,
   label: string,
-  choices: T[],
+  choices: readonly T[],
   resolveValue: (value: string, choices: T[]) => T | undefined,
   formatChoice: (choice: T) => string,
   unsupportedLabel: string,
 ): Promise<T> {
+  if (choices.length === 0) {
+    throw new CliError(`No supported ${unsupportedLabel}s available for ${label}`, ExitCode.InvalidArgs);
+  }
+
   if (value) {
-    const choice = resolveValue(value, choices);
+    const choice = resolveValue(value, [...choices]);
     if (choice) return choice;
 
     throw new CliError(
       `Unsupported ${unsupportedLabel} for ${label}: ${value}`,
       ExitCode.InvalidArgs,
-      `Supported ${unsupportedLabel}s: ${choices.map(formatChoice).join(", ")}`,
+      `Supported ${unsupportedLabel}s: ${formatSupportedChoices(choices, formatChoice)}`,
     );
   }
 
@@ -111,17 +167,45 @@ async function selectIfMissing<T>(
   });
 }
 
-function validateIntentOptions(options: Record<keyof IntentOptions, string>): IntentOptions {
+function parseHumanAmount(value: string, decimals: number): string {
+  const amount = value.trim();
+  if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(amount) || Number(amount) <= 0) {
+    throw new CliError("--amount must be a positive number", ExitCode.InvalidArgs);
+  }
+
+  try {
+    const parsed = parseUnits(amount, decimals);
+    if (parsed <= 0n) {
+      throw new CliError("--amount is smaller than the token's smallest unit", ExitCode.InvalidArgs);
+    }
+    return parsed.toString();
+  } catch (_error) {
+    if (_error instanceof CliError) {
+      throw _error;
+    }
+    throw new CliError(
+      `--amount has too many decimal places for a token with ${decimals} decimals`,
+      ExitCode.InvalidArgs,
+    );
+  }
+}
+
+function validateIntentOptions(options: RawIntentOptions): IntentOptions {
   const validated = {
     fromChain: options.fromChain.trim(),
     toChain: options.toChain.trim(),
-    fromToken: options.fromToken.trim(),
-    toToken: options.toToken.trim(),
+    fromToken: options.fromToken,
+    toToken: options.toToken,
     amount: options.amount.trim(),
     type: options.type.trim(),
   };
 
-  const missingOption = Object.entries(validated).find(([, value]) => !value)?.[0];
+  const missingOption = [
+    ["fromChain", validated.fromChain],
+    ["toChain", validated.toChain],
+    ["amount", validated.amount],
+    ["type", validated.type],
+  ].find(([, value]) => !value)?.[0];
   if (missingOption) {
     throw new CliError(
       `Missing required option: --${missingOption.replace(/[A-Z]/g, "-$&").toLowerCase()}`,
@@ -129,23 +213,30 @@ function validateIntentOptions(options: Record<keyof IntentOptions, string>): In
     );
   }
 
-  if (!/^[1-9]\d*$/.test(validated.amount)) {
-    throw new CliError("--amount must be a positive integer in the token's smallest unit", ExitCode.InvalidArgs);
-  }
-
   if (!INTENT_TYPES.includes(validated.type as IntentType)) {
     throw new CliError("--type must be either exact-input or exact-output", ExitCode.InvalidArgs);
   }
 
+  const type = validated.type as IntentType;
+
   return {
     ...validated,
-    type: validated.type as IntentType,
+    amount: parseHumanAmount(
+      validated.amount,
+      type === "exact-input" ? options.fromToken.decimals : options.toToken.decimals,
+    ),
+    type,
   };
 }
 
+async function getIntentType(type: string | undefined): Promise<IntentType> {
+  return selectIfMissing(type, "--type", INTENT_TYPES, findIntentType, (intentType) => intentType, "type");
+}
+
 async function getIntentOptions(
-  options: Partial<Record<keyof IntentOptions, string>>,
+  options: Partial<Record<keyof IntentCommandOptions, string>>,
   chains: SupportedIntentChain[],
+  type: IntentType,
 ): Promise<IntentOptions> {
   const fromChain = await selectIfMissing(
     options.fromChain,
@@ -169,13 +260,33 @@ async function getIntentOptions(
     throw new CliError("--from-chain and --to-chain must be different", ExitCode.InvalidArgs);
   }
 
+  const [fromTokens, toTokens] = await withSpinner("Fetching supported intent tokens...", () =>
+    Promise.all([getTokens(fromChain.chainId), getTokens(toChain.chainId)]),
+  );
+  const fromToken = await selectIfMissing(
+    options.fromToken,
+    "--from-token",
+    fromTokens,
+    findSupportedToken,
+    formatTokenOption,
+    "token",
+  );
+  const toToken = await selectIfMissing(
+    options.toToken,
+    "--to-token",
+    toTokens,
+    findSupportedToken,
+    formatTokenOption,
+    "token",
+  );
+
   return validateIntentOptions({
     fromChain: fromChain.chainId,
     toChain: toChain.chainId,
-    fromToken: await promptIfMissing(options.fromToken, "--from-token"),
-    toToken: await promptIfMissing(options.toToken, "--to-token"),
+    fromToken,
+    toToken,
     amount: await promptIfMissing(options.amount, "--amount"),
-    type: await promptIfMissing(options.type, "--type"),
+    type,
   });
 }
 
@@ -185,28 +296,25 @@ export function registerIntentCommand(program: Command): void {
     .description("Execute a LI.FI intent quote")
     .option("--from-chain <chain>", "Source chain name, or ID (e.g. ethereum, 1)")
     .option("--to-chain <chain>", "Destination chain name, or ID (e.g. base, 8453)")
-    .option("--from-token <token>", "Token to send, as a symbol or address (e.g. USDC, 0xa0b8...)")
-    .option("--to-token <token>", "Token to receive, as a symbol or address")
-    .option("--amount <amount>", "Amount in smallest unit")
-    .addOption(
-      new Option("--type <type>", "Intent quote type")
-        .choices(["exact-input", "exact-output"] satisfies IntentType[])
-        .default("exact-output"),
-    )
+    .option("--from-token <token>", "Token to send, as a symbol, name or address (e.g. USDC, 0xa0b8...)")
+    .option("--to-token <token>", "Token to receive, as a symbol, name or address")
+    .option("--amount <amount>", "Amount as a human-readable number (e.g. 1 for 1 USDC)")
+    .addOption(new Option("--type <type>", "Intent quote type").choices(INTENT_TYPES))
     .addHelpText(
       "after",
       `
 Examples:
-  $ lifi intent --from-chain ethereum --to-chain base --from-token USDC --to-token USDC --amount 1000000 --type exact-input
-  $ lifi intent --from-chain 1 --to-chain 8453 --from-token USDC --to-token USDC --amount 1000000 --type exact-output`,
+  $ lifi intent --from-chain ethereum --to-chain base --from-token USDC --to-token USDC --amount 1 --type exact-input
+  $ lifi intent --from-chain 1 --to-chain 8453 --from-token USDC --to-token USDC --amount 1 --type exact-output`,
     )
     .action(async (options, command) => {
       const opts = command.optsWithGlobals();
       try {
+        const type = await getIntentType(options.type);
         const chains = await withSpinner("Fetching supported intent chains...", () => fetchSupportedChains());
-        const intentOptions = await getIntentOptions(options, chains);
+        const intentOptions = await getIntentOptions(options, chains, type);
 
-        
+        console.log(intentOptions)
       } catch (error) {
         handleError(error);
       }
