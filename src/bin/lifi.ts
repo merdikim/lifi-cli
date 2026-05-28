@@ -5,6 +5,7 @@ import { registerChainsCommand } from "../commands/chains.js";
 import { registerConnectionsCommand } from "../commands/connections.js";
 import { registerGasCommand } from "../commands/gas.js";
 import { registerHealthCommand } from "../commands/health.js";
+import { registerIntentCommand } from "../commands/intent.js";
 import { registerQuoteCommand } from "../commands/quote.js";
 import { registerRoutesCommand } from "../commands/routes.js";
 import { registerStatusCommand } from "../commands/status.js";
@@ -45,6 +46,7 @@ export function createProgram(): Command {
   registerChainsCommand(program);
   registerTokensCommand(program);
   registerQuoteCommand(program);
+  registerIntentCommand(program);
   registerRoutesCommand(program);
   registerStatusCommand(program);
   registerConnectionsCommand(program);
