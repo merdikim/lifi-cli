@@ -4,14 +4,14 @@ import { type Command, Option } from "commander";
 import { parseUnits } from "viem";
 import { ExitCode } from "../core/constants.js";
 import { CliError, handleError, mapAxiosError } from "../core/errors.js";
-import { formatTable, isJsonMode, jsonOutput } from "../core/formatter.js";
 import { withSpinner } from "../core/interactive.js";
+import { getInteropAddress } from "../core/interop-address.js";
 import type { Token } from "../types/index.js";
 import { getTokens } from "./tokens.js";
 
 type IntentType = "exact-input" | "exact-output";
 
-interface SupportedIntentChain {
+export interface SupportedIntentChain {
   id: number;
   chainId: string;
   chainType: string;
@@ -20,7 +20,7 @@ interface SupportedIntentChain {
   isActive: boolean;
 }
 
-interface IntentOptions {
+export interface IntentOptions {
   fromChain: string;
   toChain: string;
   fromToken: Token;
@@ -47,7 +47,46 @@ interface RawIntentOptions {
   type: string;
 }
 
+export interface IntentQuoteRequest {
+  user: string;
+  intent: {
+    intentType: "oif-swap";
+    inputs: Array<{
+      user: string;
+      asset: string;
+      amount: string | null;
+    }>;
+    outputs: Array<{
+      receiver: string;
+      asset: string;
+      amount: string | null;
+    }>;
+    swapType: IntentType;
+  };
+  supportedTypes: ["oif-escrow-v0"];
+}
+
+export interface IntentQuote {
+  order: null;
+  validUntil: number;
+  quoteId: string;
+  preview: {
+    inputs: Array<{ user: string; asset: string; amount: string }>;
+    outputs: Array<{ receiver: string; asset: string; amount: string }>;
+  };
+  metadata: {
+    exclusiveFor: string | null;
+  };
+  partialFill: boolean;
+  failureHandling: string;
+}
+
+export interface IntentQuoteResponse {
+  quotes: IntentQuote[];
+}
+
 const INTENTS_API_BASE_URL = "https://order.li.fi";
+const INTENT_USER_ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 const INTENT_TYPES = ["exact-input", "exact-output"] as const satisfies readonly IntentType[];
 
 function createIntentsApiClient(): AxiosInstance {
@@ -229,6 +268,42 @@ function validateIntentOptions(options: RawIntentOptions): IntentOptions {
   };
 }
 
+function buildIntentQuoteRequest(options: IntentOptions): IntentQuoteRequest {
+  const user = getInteropAddress(INTENT_USER_ADDRESS, options.fromToken.chainId);
+  const receiver = getInteropAddress(INTENT_USER_ADDRESS, options.toToken.chainId);
+  const inputAsset = getInteropAddress(options.fromToken.address, options.fromToken.chainId);
+  const outputAsset = getInteropAddress(options.toToken.address, options.toToken.chainId);
+
+  return {
+    user,
+    intent: {
+      intentType: "oif-swap",
+      inputs: [
+        {
+          user,
+          asset: inputAsset,
+          amount: options.type === "exact-input" ? options.amount : null,
+        },
+      ],
+      outputs: [
+        {
+          receiver,
+          asset: outputAsset,
+          amount: options.type === "exact-output" ? options.amount : null,
+        },
+      ],
+      swapType: options.type,
+    },
+    supportedTypes: ["oif-escrow-v0"],
+  };
+}
+
+export async function fetchIntentQuotes(options: IntentOptions): Promise<IntentQuote[]> {
+  const request = buildIntentQuoteRequest(options);
+  const { data } = await intentsApi.post<IntentQuoteResponse>("/quote/request", request);
+  return Array.isArray(data.quotes) ? data.quotes : [];
+}
+
 async function getIntentType(type: string | undefined): Promise<IntentType> {
   return selectIfMissing(type, "--type", INTENT_TYPES, findIntentType, (intentType) => intentType, "type");
 }
@@ -307,14 +382,20 @@ Examples:
   $ lifi intent --from-chain ethereum --to-chain base --from-token USDC --to-token USDC --amount 1 --type exact-input
   $ lifi intent --from-chain 1 --to-chain 8453 --from-token USDC --to-token USDC --amount 1 --type exact-output`,
     )
-    .action(async (options, command) => {
-      const opts = command.optsWithGlobals();
+    .action(async (options) => {
       try {
         const type = await getIntentType(options.type);
         const chains = await withSpinner("Fetching supported intent chains...", () => fetchSupportedChains());
         const intentOptions = await getIntentOptions(options, chains, type);
+        const quotes = await withSpinner("Fetching intent quotes...", () => fetchIntentQuotes(intentOptions));
 
-        console.log(intentOptions)
+        if (quotes.length === 0) {
+          console.log("No intent quotes found for the selected tokens and amount.");
+          console.log("Try a different token pair, amount or try again later.")
+          return;
+        }
+
+        console.log(quotes);
       } catch (error) {
         handleError(error);
       }
