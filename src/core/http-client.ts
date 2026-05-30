@@ -1,7 +1,7 @@
 import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import axios from "axios";
 import { getApiKey } from "./config.js";
-import { API_BASE_URL, AUTH_HEADER, EARN_API_BASE_URL, INTEGRATOR_ID } from "./constants.js";
+import { API_BASE_URL, AUTH_HEADER, EARN_API_BASE_URL, INTEGRATOR_ID, INTENT_API_BASE_URL } from "./constants.js";
 import { mapAxiosError } from "./errors.js";
 
 // Singleton — each CLI invocation runs one command in one process, so shared
@@ -37,3 +37,4 @@ export function createApiClient(baseURL = API_BASE_URL): AxiosInstance {
 
 export const api = createApiClient();
 export const earnApi = createApiClient(EARN_API_BASE_URL);
+export const intentApi = createApiClient(INTENT_API_BASE_URL);

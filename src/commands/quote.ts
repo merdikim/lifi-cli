@@ -1,23 +1,10 @@
-import { input } from "@inquirer/prompts";
 import { type Command, Option } from "commander";
-import { ExitCode } from "../core/constants.js";
-import { CliError, handleError } from "../core/errors.js";
+import { handleError } from "../core/errors.js";
 import { formatAmount, formatTable, isJsonMode, jsonOutput } from "../core/formatter.js";
 import { api } from "../core/http-client.js";
 import { withSpinner } from "../core/interactive.js";
+import { promptIfMissing } from "../core/prompt-if-missing.js";
 import type { QuoteResponse, RouteOrder } from "../types/index.js";
-
-async function promptIfMissing(value: string | undefined, label: string): Promise<string> {
-  if (value) return value;
-  if (process.env["LIFI_NO_INPUT"] === "1") {
-    throw new CliError(
-      `Missing required option: ${label}`,
-      ExitCode.InvalidArgs,
-      "Pass all required flags when using --no-input",
-    );
-  }
-  return input({ message: `${label}:` });
-}
 
 export function registerQuoteCommand(program: Command): void {
   program
