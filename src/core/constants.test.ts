@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { API_BASE_URL, AUTH_HEADER, ENV_API_KEY, ExitCode, INTEGRATOR_ID } from "./constants.js";
+import { API_BASE_URL, AUTH_HEADER, EARN_API_BASE_URL, ENV_API_KEY, ExitCode, INTEGRATOR_ID } from "./constants.js";
 
 describe("constants", () => {
   it("API_BASE_URL points to li.quest v1", () => {
     expect(API_BASE_URL).toBe("https://li.quest/v1");
+  });
+
+  it("EARN_API_BASE_URL points to LI.FI Earn v1", () => {
+    expect(EARN_API_BASE_URL).toBe("https://earn.li.fi/v1");
   });
 
   it("INTEGRATOR_ID is lifi-cli", () => {

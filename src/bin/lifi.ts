@@ -3,6 +3,7 @@ import { registerAuthCommand } from "../commands/auth.js";
 import { registerBalanceCommand } from "../commands/balance.js";
 import { registerChainsCommand } from "../commands/chains.js";
 import { registerConnectionsCommand } from "../commands/connections.js";
+import { registerEarnCommand } from "../commands/earn.js";
 import { registerGasCommand } from "../commands/gas.js";
 import { registerHealthCommand } from "../commands/health.js";
 import { registerIntentCommand } from "../commands/intent.js";
@@ -50,6 +51,7 @@ export function createProgram(): Command {
   registerRoutesCommand(program);
   registerStatusCommand(program);
   registerConnectionsCommand(program);
+  registerEarnCommand(program);
   registerToolsCommand(program);
   registerGasCommand(program);
   registerHealthCommand(program);

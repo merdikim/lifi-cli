@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../core/http-client.js", () => ({
   api: { get: vi.fn(), post: vi.fn() },
+  earnApi: { get: vi.fn() },
 }));
 
 vi.mock("ora", () => ({
@@ -46,6 +47,7 @@ describe("lifi entry point", () => {
     expect(commandNames).toContain("status");
     expect(commandNames).toContain("connections");
     expect(commandNames).toContain("gas");
+    expect(commandNames).toContain("earn");
     expect(commandNames).toContain("chain");
     expect(commandNames).toContain("health");
   });

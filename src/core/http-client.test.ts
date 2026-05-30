@@ -68,6 +68,11 @@ describe("http-client", () => {
       const result = handler.fulfilled(config);
       expect(result.params.integrator).toBe("lifi-cli");
     });
+
+    it("creates Earn client with the correct base URL", async () => {
+      const client = createApiClient("https://earn.li.fi/v1");
+      expect(client.defaults.baseURL).toBe("https://earn.li.fi/v1");
+    });
   });
 
   describe("mapResponseError", () => {

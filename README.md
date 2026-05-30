@@ -95,6 +95,17 @@ lifi gas                       # Gas prices for all chains
 lifi gas 1                     # Detailed gas suggestion for Ethereum
 ```
 
+### Earn
+
+```bash
+lifi earn vaults --chain 8453 --asset USDC        # List Earn vaults
+lifi earn vaults --protocol aave --json           # Raw vault data
+lifi earn vault 8453 0xVAULT_ADDRESS              # Get one vault
+lifi earn chains                                  # Chains supported by Earn
+lifi earn protocols                               # Protocols supported by Earn
+lifi earn positions 0xYOUR_ADDRESS                # Wallet Earn positions
+```
+
 ### API Key Management
 
 ```bash
@@ -165,6 +176,7 @@ export LIFI_API_KEY=your_key_here
 ```
 
 Without `LIFI_API_KEY`, the CLI uses public rate limits (200 req/2hr). With a key, you get 200 req/min.
+The same `LIFI_API_KEY` is sent to both LI.FI API hosts used by this CLI: `https://li.quest/v1` and `https://earn.li.fi/v1`.
 
 ## Exit Codes
 
