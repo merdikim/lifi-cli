@@ -165,6 +165,7 @@ describe("intent command", () => {
         supportedTypes: ["oif-escrow-v0"],
       }),
     );
+    expect(consoleOutput).toContain("You will pay 1 USDC on Base and receive 0.999 USDC on Arbitrum.");
   });
 
   it("returns an empty array when no intent quotes are found", async () => {

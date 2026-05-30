@@ -4,6 +4,7 @@ import { type Command, Option } from "commander";
 import { parseUnits } from "viem";
 import { ExitCode } from "../core/constants.js";
 import { CliError, handleError, mapAxiosError } from "../core/errors.js";
+import { formatAmount } from "../core/formatter.js";
 import { withSpinner } from "../core/interactive.js";
 import { getInteropAddress } from "../core/interop-address.js";
 import type { Token } from "../types/index.js";
@@ -27,6 +28,8 @@ export interface IntentOptions {
   toToken: Token;
   amount: string;
   type: IntentType;
+  fromChainName?: string | undefined;
+  toChainName?: string | undefined;
 }
 
 interface IntentCommandOptions {
@@ -36,6 +39,8 @@ interface IntentCommandOptions {
   toToken: string;
   amount: string;
   type: string;
+  fromChainName?: string | undefined;
+  toChainName?: string | undefined;
 }
 
 interface RawIntentOptions {
@@ -45,6 +50,8 @@ interface RawIntentOptions {
   toToken: Token;
   amount: string;
   type: string;
+  fromChainName?: string;
+  toChainName?: string;
 }
 
 export interface IntentQuoteRequest {
@@ -71,8 +78,16 @@ export interface IntentQuote {
   validUntil: number;
   quoteId: string;
   preview: {
-    inputs: Array<{ user: string; asset: string; amount: string }>;
-    outputs: Array<{ receiver: string; asset: string; amount: string }>;
+    inputs: Array<{
+      user: string;
+      asset: string;
+      amount: string;
+    }>;
+    outputs: Array<{
+      receiver: string;
+      asset: string;
+      amount: string;
+    }>;
   };
   metadata: {
     exclusiveFor: string | null;
@@ -237,6 +252,8 @@ function validateIntentOptions(options: RawIntentOptions): IntentOptions {
     toToken: options.toToken,
     amount: options.amount.trim(),
     type: options.type.trim(),
+    fromChainName: options.fromChainName,
+    toChainName: options.toChainName,
   };
 
   const missingOption = [
@@ -265,6 +282,8 @@ function validateIntentOptions(options: RawIntentOptions): IntentOptions {
       type === "exact-input" ? options.fromToken.decimals : options.toToken.decimals,
     ),
     type,
+    fromChainName: validated.fromChainName,
+    toChainName: validated.toChainName,
   };
 }
 
@@ -302,6 +321,17 @@ export async function fetchIntentQuotes(options: IntentOptions): Promise<IntentQ
   const request = buildIntentQuoteRequest(options);
   const { data } = await intentsApi.post<IntentQuoteResponse>("/quote/request", request);
   return Array.isArray(data.quotes) ? data.quotes : [];
+}
+
+function formatQuoteReview(quote: IntentQuote, options: IntentOptions): string {
+  const input = quote.preview.inputs[0];
+  const output = quote.preview.outputs[0];
+  const inputAmount = formatAmount(input?.amount ?? options.amount, options.fromToken.decimals);
+  const outputAmount = formatAmount(output?.amount ?? options.amount, options.toToken.decimals);
+
+  return `You will pay ${inputAmount} ${options.fromToken.symbol} on ${
+    options.fromChainName ?? options.fromChain
+  } and receive ${outputAmount} ${options.toToken.symbol} on ${options.toChainName ?? options.toChain}.`;
 }
 
 async function getIntentType(type: string | undefined): Promise<IntentType> {
@@ -362,6 +392,8 @@ async function getIntentOptions(
     toToken,
     amount: await promptIfMissing(options.amount, "--amount"),
     type,
+    fromChainName: fromChain.name,
+    toChainName: toChain.name,
   });
 }
 
@@ -391,11 +423,18 @@ Examples:
 
         if (quotes.length === 0) {
           console.log("No intent quotes found for the selected tokens and amount.");
-          console.log("Try a different token pair, amount or try again later.")
+          console.log("Try a different token pair, amount or try again later.");
           return;
         }
 
-        console.log(quotes);
+        const quote = quotes[0];
+        if (!quote) {
+          console.log("No intent quotes found for the selected tokens and amount.");
+          console.log("Try a different token pair, amount or try again later.");
+          return;
+        }
+
+        console.log(formatQuoteReview(quote, intentOptions));
       } catch (error) {
         handleError(error);
       }
