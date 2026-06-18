@@ -13,3 +13,4 @@ dist/
 pnpm-debug.log*
 .pnpm-store/
 .env
+src/commands/intent-temp.ts

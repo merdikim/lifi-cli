@@ -6,6 +6,11 @@ import { api } from "../core/http-client.js";
 import { withSpinner } from "../core/interactive.js";
 import type { Chain, ChainType } from "../types/index.js";
 
+export async function fetchChains(): Promise<Chain[]> {
+  const { data } = await api.get<{ chains: Chain[] }>("/chains");
+  return data.chains;
+}
+
 export function registerChainsCommand(program: Command): void {
   program
     .command("chains")
@@ -22,9 +27,7 @@ Examples:
     .action(async (options, command) => {
       const opts = command.optsWithGlobals();
       try {
-        const { data } = await withSpinner("Fetching chains...", () => api.get<{ chains: Chain[] }>("/chains"));
-
-        let chains: Chain[] = data.chains;
+        let chains = await withSpinner("Fetching chains...", () => fetchChains());
         if (options.type) {
           const type = options.type as ChainType;
           chains = chains.filter((c) => c.chainType === type);
@@ -56,9 +59,7 @@ Examples:
     .action(async (idOrName, _options, command) => {
       const opts = command.optsWithGlobals();
       try {
-        const { data } = await withSpinner("Fetching chains...", () => api.get<{ chains: Chain[] }>("/chains"));
-
-        const allChains: Chain[] = data.chains;
+        const allChains = await withSpinner("Fetching chains...", () => fetchChains());
         const isNumeric = /^\d+$/.test(idOrName);
 
         const chain = isNumeric

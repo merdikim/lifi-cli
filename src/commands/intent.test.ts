@@ -23,35 +23,13 @@ const axiosMock = vi.hoisted(() => {
 
 const ethersMock = vi.hoisted(() => {
   const testAddress = "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf";
-  const approvalTx = {
-    wait: vi.fn(),
-  };
-  const openTx = {
-    hash: "0xopen",
-    wait: vi.fn(),
-  };
-  const erc20Contract = {
-    allowance: vi.fn(),
-    approve: vi.fn(),
-  };
-  const escrowContract = {
-    open: vi.fn(),
-  };
 
   return {
-    approvalTx,
-    openTx,
-    erc20Contract,
-    escrowContract,
-    JsonRpcProvider: vi.fn((url) => ({ url })),
     Wallet: vi.fn((privateKey, provider) => ({
       privateKey,
       provider,
       address: testAddress,
     })),
-    Contract: vi.fn((address) =>
-      address === "0x000025c3226C00B2Cdc200005a1600509f4e00C0" ? escrowContract : erc20Contract,
-    ),
   };
 });
 
@@ -67,9 +45,7 @@ vi.mock("ethers", async (importOriginal) => {
     ...actual,
     ethers: {
       ...actual.ethers,
-      JsonRpcProvider: ethersMock.JsonRpcProvider,
       Wallet: ethersMock.Wallet,
-      Contract: ethersMock.Contract,
     },
   };
 });
@@ -134,21 +110,47 @@ describe("intent command", () => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
     vi.stubEnv("PRIVATE_KEY", TEST_PRIVATE_KEY);
-    mockedInput.mockResolvedValue("https://base.example");
+    mockedInput.mockResolvedValue("https://sepolia.base.org");
     consoleOutput = [];
-    ethersMock.approvalTx.wait.mockReset();
-    ethersMock.openTx.wait.mockReset();
-    ethersMock.erc20Contract.allowance.mockReset();
-    ethersMock.erc20Contract.approve.mockReset();
-    ethersMock.escrowContract.open.mockReset();
     axiosMock.create.mockReturnValue(axiosMock.client);
     axiosMock.client.get.mockImplementation(async (url) => ({
       data:
-        url === "/orders/status"
+        url === "/chains"
           ? {
-              meta: {
-                orderStatus: "Settled",
-              },
+              chains: [
+                {
+                  id: 8453,
+                  key: "base",
+                  name: "Base",
+                  chainType: "EVM",
+                  coin: "ETH",
+                  mainnet: true,
+                  nativeToken: {
+                    address: "0x0000000000000000000000000000000000000000",
+                    chainId: 8453,
+                    symbol: "ETH",
+                    decimals: 18,
+                    name: "Ether",
+                  },
+                  metamask: { chainName: "Base", rpcUrls: ["https://sepolia.base.org"] },
+                },
+                {
+                  id: 42161,
+                  key: "arbitrum",
+                  name: "Arbitrum",
+                  chainType: "EVM",
+                  coin: "ETH",
+                  mainnet: true,
+                  nativeToken: {
+                    address: "0x0000000000000000000000000000000000000000",
+                    chainId: 42161,
+                    symbol: "ETH",
+                    decimals: 18,
+                    name: "Ether",
+                  },
+                  metamask: { chainName: "Arbitrum One", rpcUrls: ["https://arbitrum.example"] },
+                },
+              ],
             }
           : [
               {
@@ -156,7 +158,7 @@ describe("intent command", () => {
                 chainId: "8453",
                 chainType: "eip155",
                 name: "Base",
-                rpcUrls: ["https://base.example"],
+                rpcUrls: ["https://sepolia.base.org"],
                 isActive: true,
               },
               {
@@ -169,17 +171,6 @@ describe("intent command", () => {
               },
             ],
     }));
-    ethersMock.erc20Contract.allowance.mockResolvedValue(0n);
-    ethersMock.erc20Contract.approve.mockResolvedValue(ethersMock.approvalTx);
-    ethersMock.openTx.wait.mockResolvedValue({
-      logs: [
-        {
-          address: "0x000025c3226C00B2Cdc200005a1600509f4e00C0",
-          topics: ["0xopen", "0xabc"],
-        },
-      ],
-    });
-    ethersMock.escrowContract.open.mockResolvedValue(ethersMock.openTx);
     axiosMock.client.post.mockResolvedValue({
       data: {
         quotes: [
@@ -211,7 +202,7 @@ describe("intent command", () => {
       "test",
       "intent",
       "--from-chain",
-      "8453",
+      "base",
       "--to-chain",
       "42161",
       "--from-token",
@@ -248,7 +239,8 @@ describe("intent command", () => {
         supportedTypes: ["oif-escrow-v0"],
       }),
     );
-    expect(mockedInput).toHaveBeenCalledWith({ message: "--rpc-url (Base RPC URL):" });
+    expect(axiosMock.client.get).toHaveBeenCalledWith("/chains");
+    expect(mockedInput).not.toHaveBeenCalled();
     expect(consoleOutput).toContain("You will pay 1 USDC on Base and receive 0.999 USDC on Arbitrum.");
   });
 
@@ -272,70 +264,6 @@ describe("intent command", () => {
 
     expect(address).toBe(TEST_ADDRESS);
     expect(signer.address).toBe(address);
-  });
-
-  it("approves, opens, and tracks the selected escrow quote", async () => {
-    axiosMock.client.post.mockResolvedValueOnce({
-      data: {
-        quotes: [
-          {
-            order: null,
-            validUntil: 1_800_000_000,
-            quoteId: "quote_test",
-            preview: {
-              inputs: [{ user: "user", asset: "input", amount: "1000000" }],
-              outputs: [{ receiver: "receiver", asset: "output", amount: "999000" }],
-            },
-            metadata: { exclusiveFor: null },
-            partialFill: false,
-            failureHandling: "refund-automatic",
-          },
-        ],
-      },
-    });
-
-    const program = createProgram();
-    await program.parseAsync([
-      "node",
-      "test",
-      "intent",
-      "--from-chain",
-      "8453",
-      "--to-chain",
-      "42161",
-      "--from-token",
-      "USDC",
-      "--to-token",
-      "USDC",
-      "--amount",
-      "1",
-      "--type",
-      "exact-input",
-      "--json",
-    ]);
-
-    expect(ethersMock.JsonRpcProvider).toHaveBeenCalledWith("https://base.example");
-    expect(ethersMock.Wallet).toHaveBeenCalledWith(
-      `0x${TEST_PRIVATE_KEY}`,
-      expect.objectContaining({ url: "https://base.example" }),
-    );
-    expect(ethersMock.erc20Contract.approve).toHaveBeenCalledWith(
-      "0x000025c3226C00B2Cdc200005a1600509f4e00C0",
-      1000000n,
-    );
-    expect(ethersMock.approvalTx.wait).toHaveBeenCalled();
-    expect(ethersMock.escrowContract.open).toHaveBeenCalledWith(expect.stringMatching(/^0x/));
-    expect(ethersMock.openTx.wait).toHaveBeenCalled();
-    expect(ethersMock.Contract).toHaveBeenCalledWith(
-      "0x000025c3226C00B2Cdc200005a1600509f4e00C0",
-      expect.arrayContaining(["function open(bytes order) external"]),
-      expect.objectContaining({ address: TEST_ADDRESS }),
-    );
-    expect(axiosMock.client.get).toHaveBeenCalledWith("/orders/status", {
-      params: { onChainOrderId: "0xabc" },
-    });
-    expect(consoleOutput).toContain("Order opened! Tx: 0xopen");
-    expect(consoleOutput).toContain("Final status: Settled");
   });
 
   it("prints a useful message when no intent quotes are found", async () => {

@@ -20,6 +20,7 @@ import type {
   Token,
   UnvalidatedIntentOptions,
 } from "../types/index.js";
+import { fetchChains } from "./chains.js";
 import { getTokens } from "./tokens.js";
 
 const INTENT_TYPES = ["exact-input", "exact-output"] satisfies readonly IntentType[];
@@ -238,16 +239,28 @@ export async function fetchIntentQuotes(options: IntentOptions): Promise<IntentQ
 }
 
 async function resolveRpcUrl(optionsRpcUrl: string | undefined, chain: SupportedIntentChain): Promise<string> {
-  const rpcUrl = (await promptIfMissing(optionsRpcUrl, `--rpc-url (${chain.name} RPC URL)`)).trim();
-  if (!rpcUrl) {
-    throw new CliError(
-      `Missing RPC URL for ${chain.name}`,
-      ExitCode.InvalidArgs,
-      "Pass --rpc-url before opening an escrow order.",
-    );
-  }
+  if (optionsRpcUrl) return optionsRpcUrl;
 
-  return rpcUrl;
+  const chainsData = await withSpinner("Fetching --from-chain data...", () => fetchChains());
+  if (chainsData.length === 0) {
+    throw new CliError(`Chains data not found`, ExitCode.InvalidArgs);
+  }
+  const fromChainData = chainsData.find((chainData) => chainData.id === Number(chain.chainId));
+
+  if (!fromChainData) {
+    throw new CliError(`Chain "${chain.chainId}" data not found`, ExitCode.InvalidArgs);
+  }
+  const catalogRpcUrl = fromChainData.metamask?.rpcUrls[0];
+  if (catalogRpcUrl) return catalogRpcUrl;
+
+  const promptedRpcUrl = (await promptIfMissing(undefined, `--rpc-url (${chain.name} RPC URL)`)).trim();
+  if (promptedRpcUrl) return promptedRpcUrl;
+
+  throw new CliError(
+    `Missing RPC URL for ${chain.name}`,
+    ExitCode.InvalidArgs,
+    "Pass --rpc-url before opening an escrow order.",
+  );
 }
 
 function formatQuoteReview(quote: IntentQuote, options: IntentOptions): string {
