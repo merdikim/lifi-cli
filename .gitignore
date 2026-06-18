@@ -12,3 +12,4 @@ dist/
 *.tsbuildinfo
 pnpm-debug.log*
 .pnpm-store/
+.env

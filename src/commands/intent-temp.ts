@@ -1,7 +1,7 @@
 import { select } from "@inquirer/prompts";
 import { type Command, Option } from "commander";
 import { ethers } from "ethers";
-import { parseUnits } from "viem";
+import { type Address, type Hex, parseUnits } from "viem";
 import { ExitCode } from "../core/constants.js";
 import { CliError, handleError } from "../core/errors.js";
 import { formatAmount } from "../core/formatter.js";
@@ -12,10 +12,12 @@ import { promptIfMissing } from "../core/prompt-if-missing.js";
 import type {
   IntentCommandOptions,
   IntentOptions,
+  IntentOrderStatusResponse,
   IntentQuote,
   IntentQuoteRequest,
   IntentQuoteResponse,
   IntentType,
+  StandardEscrowOrder,
   SupportedIntentChain,
   Token,
   UnvalidatedIntentOptions,
@@ -23,6 +25,19 @@ import type {
 import { getTokens } from "./tokens.js";
 
 const INTENT_TYPES = ["exact-input", "exact-output"] satisfies readonly IntentType[];
+const INPUT_SETTLER_ESCROW = "0x000025c3226C00B2Cdc200005a1600509f4e00C0";
+const POLYMER_ORACLE = "0x0000003E06000007A224AeE90052fA6bb46d43C9";
+const OUTPUT_SETTLER = "0x0000000000eC36B683C2E6AC89e9A75989C22a2e";
+const TERMINAL_ORDER_STATUSES = new Set(["Settled", "Expired"]);
+const ERC20_ABI = [
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+];
+const INPUT_SETTLER_ESCROW_ABI = ["function open(bytes order) external"];
+
+const STANDARD_ORDER_ABI_TYPE =
+  "tuple(address user,uint256 nonce,uint256 originChainId,uint32 expires,uint32 fillDeadline,address inputOracle,uint256[2][] inputs,tuple(bytes32 oracle,bytes32 settler,uint256 chainId,bytes32 token,uint256 amount,bytes32 recipient,bytes call,bytes context)[] outputs)";
+
 
 async function fetchSupportedChains(): Promise<SupportedIntentChain[]> {
   const { data } = await intentApi.get<SupportedIntentChain[]>("/chains/supported");
@@ -233,12 +248,12 @@ function buildIntentQuoteRequest(options: IntentOptions): IntentQuoteRequest {
 export async function fetchIntentQuotes(options: IntentOptions): Promise<IntentQuote[]> {
   const request = buildIntentQuoteRequest(options);
   const { data } = await intentApi.post<IntentQuoteResponse>("/quote/request", request);
-  console.log("data", data);
+  console.log('data', data)
   return Array.isArray(data.quotes) ? data.quotes : [];
 }
 
-async function resolveRpcUrl(optionsRpcUrl: string | undefined, chain: SupportedIntentChain): Promise<string> {
-  const rpcUrl = (await promptIfMissing(optionsRpcUrl, `--rpc-url (${chain.name} RPC URL)`)).trim();
+function resolveRpcUrl(optionsRpcUrl: string | undefined, chain: SupportedIntentChain): string {
+  const rpcUrl = optionsRpcUrl ?? 'https://rpc.com' //chain.rpcUrls[0];
   if (!rpcUrl) {
     throw new CliError(
       `Missing RPC URL for ${chain.name}`,
@@ -248,6 +263,113 @@ async function resolveRpcUrl(optionsRpcUrl: string | undefined, chain: Supported
   }
 
   return rpcUrl;
+}
+
+function buildStandardEscrowOrder(quote: IntentQuote, options: IntentOptions): StandardEscrowOrder {
+  const { address } = createIntentSignerFromPrivateKey();
+  const inputAmount = quote.preview.inputs[0]?.amount ?? (options.type === "exact-input" ? options.amount : undefined);
+  const outputAmount =
+    quote.preview.outputs[0]?.amount ?? (options.type === "exact-output" ? options.amount : undefined);
+
+  if (!inputAmount || !outputAmount) {
+    throw new CliError(
+      "Selected quote is missing preview amounts",
+      ExitCode.ApiError,
+      "The escrow flow requires input and output amounts from the quote response.",
+    );
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+
+  return {
+    user: address as Address,
+    nonce: BigInt(Date.now()),
+    originChainId: BigInt(options.fromChain),
+    expires: now + 3_600,
+    fillDeadline: now + 1_800,
+    inputOracle: POLYMER_ORACLE as Address,
+    inputs: [[BigInt(options.fromToken.address), BigInt(inputAmount)]],
+    outputs: [
+      {
+        oracle: ethers.zeroPadValue(POLYMER_ORACLE, 32) as Hex,
+        settler: ethers.zeroPadValue(OUTPUT_SETTLER, 32) as Hex,
+        chainId: BigInt(options.toChain),
+        token: ethers.zeroPadValue(options.toToken.address, 32) as Hex,
+        amount: BigInt(outputAmount),
+        recipient: ethers.zeroPadValue(address, 32) as Hex,
+        call: "0x",
+        context: "0x",
+      },
+    ],
+  };
+}
+
+function encodeStandardEscrowOrder(order: StandardEscrowOrder): string {
+  return ethers.AbiCoder.defaultAbiCoder().encode([STANDARD_ORDER_ABI_TYPE], [order]);
+}
+
+export async function openIntentEscrowOrder(
+  quote: IntentQuote,
+  options: IntentOptions,
+): Promise<{
+  transactionHash: string;
+  onChainOrderId?: string | undefined;
+}> {
+  if (!options.rpcUrl) {
+    throw new CliError(
+      "Missing RPC URL for source chain",
+      ExitCode.InvalidArgs,
+      "Pass --rpc-url before opening an escrow order.",
+    );
+  }
+
+  const provider = new ethers.JsonRpcProvider(options.rpcUrl);
+  const { signer, address } = createIntentSignerFromPrivateKey(provider);
+
+  const inputAmount = BigInt(quote.preview.inputs[0].amount);
+  const erc20 = new ethers.Contract(options.fromToken.address, ERC20_ABI, signer);
+  const currentAllowance = await erc20.allowance(address, INPUT_SETTLER_ESCROW);
+
+  if (currentAllowance < inputAmount) {
+    const approvalTx = await erc20.approve(INPUT_SETTLER_ESCROW, inputAmount);
+    await approvalTx.wait();
+  }
+
+  const encodedOrder = encodeStandardEscrowOrder(buildStandardEscrowOrder(quote, options));
+  const escrow = new ethers.Contract(
+    INPUT_SETTLER_ESCROW,
+    INPUT_SETTLER_ESCROW_ABI,
+    signer,
+  );
+  const tx = await escrow.open(encodedOrder);
+  const receipt = await tx.wait();
+  const onChainOrderId = receipt?.logs.find(
+    (log: ethers.Log) => log.address.toLowerCase() === INPUT_SETTLER_ESCROW.toLowerCase(),
+  )?.topics[1];
+
+  return { transactionHash: tx.hash, onChainOrderId };
+}
+
+export async function fetchIntentOrderStatus(onChainOrderId: string): Promise<string | undefined> {
+  const { data } = await intentApi.get<IntentOrderStatusResponse>("/orders/status", {
+    params: { onChainOrderId },
+  });
+  return data.meta?.orderStatus;
+}
+
+export async function trackIntentOrder(onChainOrderId: string, pollIntervalMs = 3_000): Promise<string> {
+  let status: string | undefined;
+
+  do {
+    status = await fetchIntentOrderStatus(onChainOrderId);
+    console.log(`Status: ${status ?? "Unknown"}`);
+
+    if (!status || !TERMINAL_ORDER_STATUSES.has(status)) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+  } while (!status || !TERMINAL_ORDER_STATUSES.has(status));
+
+  return status;
 }
 
 function formatQuoteReview(quote: IntentQuote, options: IntentOptions): string {
@@ -319,7 +441,7 @@ async function getIntentOptions(
     toToken,
     amount: await promptIfMissing(options.amount, "--amount"),
     type,
-    rpcUrl: await resolveRpcUrl(options.rpcUrl, fromChain),
+    rpcUrl: resolveRpcUrl(options.rpcUrl, fromChain),
     fromChainName: fromChain.name,
     toChainName: toChain.name,
   });
@@ -358,6 +480,20 @@ Examples:
 
         const selectedQuote = quotes[0];
         console.log(formatQuoteReview(selectedQuote, intentOptions));
+
+        return
+
+        const openedOrder = await withSpinner("Opening escrow order on-chain...", () =>
+          openIntentEscrowOrder(selectedQuote, intentOptions),
+        );
+        console.log(`Order opened! Tx: ${openedOrder.transactionHash}`);
+        if (openedOrder.onChainOrderId) {
+          console.log(`Order ID: ${openedOrder.onChainOrderId}`);
+          const finalStatus = await withSpinner("Tracking intent order...", () =>
+            trackIntentOrder(openedOrder.onChainOrderId as string),
+          );
+          console.log(`Final status: ${finalStatus}`);
+        }
       } catch (error) {
         handleError(error);
       }

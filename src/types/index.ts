@@ -1,3 +1,5 @@
+import type { Address, Hex } from "viem";
+
 export interface GlobalOptions {
   json?: boolean;
   verbose?: boolean;
@@ -58,6 +60,120 @@ export interface Token {
 export interface TokensResponse {
   tokens: Record<string, Token[]>;
 }
+
+// --- Intent types ---
+
+export type IntentType = "exact-input" | "exact-output";
+
+export interface SupportedIntentChain {
+  id: number;
+  chainId: string;
+  chainType: string;
+  name: string;
+  rpcUrls: string[];
+}
+
+export interface IntentOptions {
+  fromChain: string;
+  toChain: string;
+  fromToken: Token;
+  toToken: Token;
+  amount: string;
+  type: IntentType;
+  rpcUrl?: string | undefined;
+  fromChainName?: string | undefined;
+  toChainName?: string | undefined;
+}
+
+export interface IntentCommandOptions {
+  fromChain: string;
+  toChain: string;
+  fromToken: string;
+  toToken: string;
+  amount: string;
+  type: string;
+  rpcUrl?: string | undefined;
+  fromChainName?: string | undefined;
+  toChainName?: string | undefined;
+}
+
+export interface UnvalidatedIntentOptions extends Omit<IntentOptions, "type"> {
+  type: string;
+}
+
+export interface IntentQuoteRequest {
+  user: string;
+  intent: {
+    intentType: "oif-swap";
+    inputs: Array<{
+      user: string;
+      asset: string;
+      amount: string | null;
+    }>;
+    outputs: Array<{
+      receiver: string;
+      asset: string;
+      amount: string | null;
+    }>;
+    swapType: IntentType;
+  };
+  supportedTypes: ["oif-escrow-v0"];
+}
+
+export interface IntentQuote {
+  order: unknown | null;
+  validUntil: number;
+  quoteId: string;
+  preview: {
+    inputs: Array<{
+      user: string;
+      asset: string;
+      amount: string;
+    }>;
+    outputs: Array<{
+      receiver: string;
+      asset: string;
+      amount: string;
+    }>;
+  };
+  metadata: {
+    exclusiveFor: string | null;
+  };
+  partialFill: boolean;
+  failureHandling: string;
+}
+
+export interface IntentQuoteResponse {
+  quotes: IntentQuote[];
+}
+
+export interface IntentOrderStatusResponse {
+  meta?: {
+    orderStatus?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export type StandardEscrowOrder = {
+  user: Address;
+  nonce: bigint;
+  originChainId: bigint;
+  expires: number;
+  fillDeadline: number;
+  inputOracle: Address;
+  inputs: Array<[bigint, bigint]>;
+  outputs: Array<{
+    oracle: Hex;
+    settler: Hex;
+    chainId: bigint;
+    token: Hex;
+    amount: bigint;
+    recipient: Hex;
+    call: Hex;
+    context: Hex;
+  }>;
+};
 
 // --- Quote types ---
 
@@ -288,7 +404,6 @@ export interface EarnPosition {
 export interface EarnPositionsResponse {
   positions: EarnPosition[];
 }
-
 
 // --- Balance / allowance result shapes ---
 // Field names mirror the LI.FI MCP server's tool result schema so JSON output is drop-in compatible.
